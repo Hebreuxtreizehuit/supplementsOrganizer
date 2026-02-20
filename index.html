@@ -81,6 +81,7 @@
         <button class="tab active" data-tab="planner">Planner</button>
         <button class="tab" data-tab="check">Take-Together Check</button>
         <button class="tab" data-tab="rules">Rules</button>
+        <button class="tab" data-tab="calendar">Calendar</button>
       </div>
 
       <!-- Planner tab -->
@@ -157,8 +158,90 @@
               <option value="note">Note</option>
             </select>
           </div>
+          <div class="tabPane" id="tab-calendar">
+  <div class="help">
+    Add medical appointments and notes. Times use your device time zone automatically:
+    <strong id="calTzLabel">—</strong>
+  </div>
 
+  <div class="grid2">
+    <div class="card">
+      <div class="cardHead">
+        <h3 id="calMonthLabel">Month</h3>
+        <div class="row gap">
+          <button id="calPrevBtn" class="ghost btnSmall">◀</button>
+          <button id="calTodayBtn" class="btnSmall">Today</button>
+          <button id="calNextBtn" class="ghost btnSmall">▶</button>
+        </div>
+      </div>
+
+      <div id="calGrid" class="calGrid"></div>
+      <div class="muted small" style="margin-top:8px;">
+        Tap a day to view/add appointments.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="cardHead">
+        <h3 id="calDayLabel">Selected Day</h3>
+        <button id="calAddBtn" class="btnSmall">+ Add Appointment</button>
+      </div>
+
+      <div id="calDayList" class="list"></div>
+    </div>
+  </div>
+
+  <!-- Appointment modal -->
+  <div id="apptModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modalCard">
+      <div class="modalHead">
+        <h3 id="apptTitle">Add Appointment</h3>
+        <button id="apptClose" class="ghost">✕</button>
+      </div>
+
+      <div class="modalBody">
+        <div class="formRow">
+          <label class="label">Title</label>
+          <input id="apptName" class="input" placeholder="e.g., Speech therapy / Pediatrician" />
+        </div>
+
+        <div class="grid2">
           <div class="formRow">
+            <label class="label">Date</label>
+            <input id="apptDate" type="date" class="input" />
+          </div>
+          <div class="formRow">
+            <label class="label">Time</label>
+            <input id="apptTime" type="time" class="input" />
+          </div>
+        </div>
+
+        <div class="formRow">
+          <label class="label">Location (optional)</label>
+          <input id="apptLoc" class="input" placeholder="e.g., SickKids / Clinic address" />
+        </div>
+
+        <div class="formRow">
+          <label class="label">Notes</label>
+          <textarea id="apptNotes" class="input textarea" placeholder="What to bring, questions to ask, documents, etc."></textarea>
+        </div>
+
+        <div class="muted small">
+          Times are saved and shown in your device time zone.
+        </div>
+      </div>
+
+      <div class="modalFoot">
+        <button id="apptDelete" class="danger hidden">Delete</button>
+        <div class="spacer"></div>
+        <button id="apptCancel" class="ghost">Cancel</button>
+        <button id="apptSave" class="btn">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+        <div class="formRow">
             <label class="label">Details</label>
             <input id="ruleText" class="input" placeholder="e.g., Separate by 2 hours (doctor/pharmacist note)" />
           </div>
@@ -191,7 +274,7 @@
           <button id="newBtn" class="btn">+ Add</button>
         </div>
       </div>
-
+      
       <div id="suppList" class="suppList"></div>
     </aside>
   </main>

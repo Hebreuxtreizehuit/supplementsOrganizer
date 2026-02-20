@@ -292,3 +292,47 @@ body{
   .topbar, .panel:last-child, .tabs, .help, .footerNote, #printBtn{display:none !important}
   .panel{box-shadow:none; border:none}
 }
+.calGrid{
+  display:grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap:8px;
+}
+
+.calDow{
+  text-align:center;
+  font-size:12px;
+  color:var(--muted);
+  padding:6px 0;
+}
+
+.calDay{
+  border:1px solid var(--line);
+  background: rgba(16,23,35,.35);
+  border-radius: 14px;
+  padding:10px 8px;
+  min-height:56px;
+  cursor:pointer;
+  position:relative;
+}
+.calDay:hover{background: rgba(16,23,35,.55)}
+.calDay.dim{opacity:.45}
+.calDay .n{
+  font-weight:900;
+}
+.calDay .dot{
+  position:absolute;
+  right:10px;
+  bottom:10px;
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background: var(--accent);
+  box-shadow:0 0 0 4px rgba(74,163,255,.12);
+}
+.calDay.today{
+  border-color: rgba(53,208,127,.5);
+}
+.calDay.sel{
+  border-color: rgba(74,163,255,.65);
+  background: rgba(74,163,255,.14);
+}

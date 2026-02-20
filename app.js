@@ -138,6 +138,7 @@ $("#importInput").addEventListener("change", async (e)=>{
     state.slots = obj.slots;
     state.plans = obj.plans;
     state.rules = obj.rules;
+    state.appointments = obj.appointments || [];
 
     ensurePlan(currentDate);
     saveState();
@@ -894,6 +895,10 @@ function init(){
       $("#weatherMeta").textContent = "GPS unavailable — type your city.";
     }
   });
+
+  wireCalendarUI();
+  renderCalendar();
+  
 }
 async function registerSW(){
   if(!("serviceWorker" in navigator)) return;
@@ -903,5 +908,257 @@ async function registerSW(){
     // silent
   }
 }
+// ---------------- Calendar / Appointments ----------------
+let calView = { year: new Date().getFullYear(), month: new Date().getMonth() }; // month 0-11
+let calSelectedISO = todayISO();
+let editingApptId = null;
 
+function pad2(n){ return String(n).padStart(2,"0"); }
+
+function toISODateLocal(d){
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+}
+
+function localTZ(){
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function monthLabel(year, monthIdx){
+  const d = new Date(year, monthIdx, 1);
+  return new Intl.DateTimeFormat(undefined, { month:"long", year:"numeric" }).format(d);
+}
+
+function sameISO(a,b){ return String(a) === String(b); }
+
+function apptsForDay(dateISO){
+  return (state.appointments || [])
+    .filter(a => a.dateISO === dateISO)
+    .sort((x,y)=> (x.timeHHMM||"99:99").localeCompare(y.timeHHMM||"99:99"));
+}
+
+function apptHasDay(dateISO){
+  return (state.appointments || []).some(a => a.dateISO === dateISO);
+}
+
+function renderCalendar(){
+  const tz = localTZ();
+  const tzEl = $("#calTzLabel");
+  if(tzEl) tzEl.textContent = tz;
+
+  $("#calMonthLabel").textContent = monthLabel(calView.year, calView.month);
+
+  const grid = $("#calGrid");
+  grid.innerHTML = "";
+
+  // DOW row
+  const dows = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  for(const d of dows){
+    const el = document.createElement("div");
+    el.className = "calDow";
+    el.textContent = d;
+    grid.appendChild(el);
+  }
+
+  const first = new Date(calView.year, calView.month, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(calView.year, calView.month+1, 0).getDate();
+
+  // previous month filler
+  const prevDays = new Date(calView.year, calView.month, 0).getDate();
+  for(let i=0;i<startDow;i++){
+    const dayNum = prevDays - startDow + 1 + i;
+    const d = new Date(calView.year, calView.month-1, dayNum);
+    addCalCell(grid, d, true);
+  }
+
+  // current month
+  for(let day=1; day<=daysInMonth; day++){
+    const d = new Date(calView.year, calView.month, day);
+    addCalCell(grid, d, false);
+  }
+
+  // next month filler to complete rows
+  const totalCells = startDow + daysInMonth;
+  const remainder = totalCells % 7;
+  const fill = remainder === 0 ? 0 : (7 - remainder);
+  for(let i=1;i<=fill;i++){
+    const d = new Date(calView.year, calView.month+1, i);
+    addCalCell(grid, d, true);
+  }
+
+  renderCalDayPanel();
+}
+
+function addCalCell(grid, dateObj, dim){
+  const iso = toISODateLocal(dateObj);
+  const isToday = sameISO(iso, todayISO());
+  const isSel = sameISO(iso, calSelectedISO);
+
+  const cell = document.createElement("div");
+  cell.className = "calDay" + (dim ? " dim" : "") + (isToday ? " today" : "") + (isSel ? " sel" : "");
+  cell.innerHTML = `<div class="n">${dateObj.getDate()}</div>`;
+
+  if(apptHasDay(iso)){
+    const dot = document.createElement("div");
+    dot.className = "dot";
+    cell.appendChild(dot);
+  }
+
+  cell.addEventListener("click", ()=>{
+    calSelectedISO = iso;
+    calView.year = dateObj.getFullYear();
+    calView.month = dateObj.getMonth();
+    renderCalendar();
+  });
+
+  grid.appendChild(cell);
+}
+
+function renderCalDayPanel(){
+  $("#calDayLabel").textContent = new Intl.DateTimeFormat(undefined, {
+    weekday:"long", year:"numeric", month:"long", day:"numeric"
+  }).format(new Date(calSelectedISO+"T00:00:00"));
+
+  const list = $("#calDayList");
+  list.innerHTML = "";
+
+  const items = apptsForDay(calSelectedISO);
+  if(items.length === 0){
+    list.innerHTML = `<div class="muted">No appointments for this day.</div>`;
+    return;
+  }
+
+  for(const a of items){
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = `
+      <div>
+        <strong>${escapeHTML(a.title)}</strong>
+        <div class="meta">
+          ${escapeHTML((a.timeHHMM ? a.timeHHMM : "Time not set") + (a.location ? " • " + a.location : ""))}
+        </div>
+        ${a.notes ? `<div class="meta">${escapeHTML(a.notes)}</div>` : ""}
+      </div>
+      <div class="right">
+        <button class="btnSmall">Edit</button>
+      </div>
+    `;
+    el.querySelector("button").addEventListener("click", ()=> openApptModal(a.id));
+    list.appendChild(el);
+  }
+}
+
+// Modal controls
+function openApptModal(id){
+  editingApptId = id || null;
+  const modal = $("#apptModal");
+  const isEdit = !!id;
+
+  $("#apptTitle").textContent = isEdit ? "Edit Appointment" : "Add Appointment";
+  $("#apptDelete").classList.toggle("hidden", !isEdit);
+
+  const appt = isEdit ? (state.appointments || []).find(x=>x.id===id) : null;
+
+  $("#apptName").value = appt?.title || "";
+  $("#apptDate").value = appt?.dateISO || calSelectedISO;
+  $("#apptTime").value = appt?.timeHHMM || "";
+  $("#apptLoc").value = appt?.location || "";
+  $("#apptNotes").value = appt?.notes || "";
+
+  modal.classList.remove("hidden");
+}
+
+function closeApptModal(){
+  $("#apptModal").classList.add("hidden");
+  editingApptId = null;
+}
+
+function saveAppt(){
+  const title = ($("#apptName").value || "").trim();
+  const dateISO = $("#apptDate").value || calSelectedISO;
+  const timeHHMM = ($("#apptTime").value || "").trim();
+  const location = ($("#apptLoc").value || "").trim();
+  const notes = ($("#apptNotes").value || "").trim();
+
+  if(!title){
+    alert("Title is required.");
+    return;
+  }
+
+  const now = Date.now();
+  const obj = {
+    id: editingApptId || uid("appt"),
+    title,
+    dateISO,
+    timeHHMM,
+    location,
+    notes,
+    createdAt: editingApptId ? (state.appointments.find(a=>a.id===editingApptId)?.createdAt || now) : now,
+    updatedAt: now
+  };
+
+  state.appointments = state.appointments || [];
+  if(editingApptId){
+    const idx = state.appointments.findIndex(a=>a.id===editingApptId);
+    if(idx >= 0) state.appointments[idx] = obj;
+  }else{
+    state.appointments.push(obj);
+  }
+
+  saveState();
+  calSelectedISO = dateISO;
+  calView.year = new Date(dateISO+"T00:00:00").getFullYear();
+  calView.month = new Date(dateISO+"T00:00:00").getMonth();
+
+  closeApptModal();
+  renderCalendar();
+}
+
+function deleteAppt(){
+  if(!editingApptId) return;
+  if(!confirm("Delete this appointment?")) return;
+
+  state.appointments = (state.appointments || []).filter(a=>a.id!==editingApptId);
+  saveState();
+  closeApptModal();
+  renderCalendar();
+}
+
+function wireCalendarUI(){
+  // buttons
+  $("#calPrevBtn").addEventListener("click", ()=>{
+    const d = new Date(calView.year, calView.month-1, 1);
+    calView.year = d.getFullYear();
+    calView.month = d.getMonth();
+    renderCalendar();
+  });
+
+  $("#calNextBtn").addEventListener("click", ()=>{
+    const d = new Date(calView.year, calView.month+1, 1);
+    calView.year = d.getFullYear();
+    calView.month = d.getMonth();
+    renderCalendar();
+  });
+
+  $("#calTodayBtn").addEventListener("click", ()=>{
+    calSelectedISO = todayISO();
+    const d = new Date(calSelectedISO+"T00:00:00");
+    calView.year = d.getFullYear();
+    calView.month = d.getMonth();
+    renderCalendar();
+  });
+
+  $("#calAddBtn").addEventListener("click", ()=> openApptModal(null));
+
+  // modal
+  $("#apptClose").addEventListener("click", closeApptModal);
+  $("#apptCancel").addEventListener("click", closeApptModal);
+  $("#apptSave").addEventListener("click", saveAppt);
+  $("#apptDelete").addEventListener("click", deleteAppt);
+
+  // close on backdrop click
+  $("#apptModal").addEventListener("click", (e)=>{
+    if(e.target.id === "apptModal") closeApptModal();
+  });
+}
 init();
