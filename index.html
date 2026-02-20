@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#0b0f14" />
   <title>Supplements Organizer</title>
 
-<link rel="manifest" href="./manifest.json?v=6" />
-<link rel="icon" href="./icons/icon-192.png?v=6" />
-<link rel="apple-touch-icon" href="./icons/icon-192.png?v=6" />
-<link rel="stylesheet" href="./styles.css?v=6" />
+  <link rel="manifest" href="./manifest.json?v=7" />
+  <link rel="icon" href="./icons/icon-192.png?v=7" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=7" />
+  <link rel="stylesheet" href="./styles.css?v=7" />
 </head>
 <body>
   <header class="topbar">
@@ -33,41 +33,43 @@
   </header>
 
   <main class="layout">
+
+    <!-- Weather + Time -->
     <section class="panel" style="grid-column: 1 / -1;">
-  <div class="panelHead">
-    <h2>Weather & Time</h2>
-    <div class="row gap">
-      <input id="cityInput" class="input" placeholder="City (e.g., Toronto)" style="max-width:260px" />
-      <button id="useCityBtn" class="btnSmall">Use City</button>
-      <button id="useGpsBtn" class="ghost btnSmall">Use GPS</button>
-    </div>
-  </div>
-
-  <div style="padding:14px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
-    <div class="card">
-      <div class="cardHead">
-        <h3>Local Time</h3>
-        <div class="muted" id="tzLabel">—</div>
-      </div>
-      <div style="font-size:34px; font-weight:900; letter-spacing:.5px;" id="timeNow">--:--:--</div>
-      <div class="muted" id="dateNow">—</div>
-    </div>
-
-    <div class="card">
-      <div class="cardHead">
-        <h3>Weather</h3>
-        <div class="muted" id="weatherCity">—</div>
+      <div class="panelHead">
+        <h2>Weather & Time</h2>
+        <div class="row gap">
+          <input id="cityInput" class="input" placeholder="City (e.g., Toronto)" style="max-width:260px" />
+          <button id="useCityBtn" class="btnSmall">Use City</button>
+          <button id="useGpsBtn" class="ghost btnSmall">Use GPS</button>
+        </div>
       </div>
 
-      <div style="display:flex; align-items:baseline; gap:10px;">
-        <div style="font-size:34px; font-weight:900;" id="tempNow">—°</div>
-        <div class="muted" id="weatherDesc">—</div>
+      <div class="wxGrid">
+        <div class="card">
+          <div class="cardHead">
+            <h3>Local Time</h3>
+            <div class="muted" id="tzLabel">—</div>
+          </div>
+          <div class="big" id="timeNow">--:--:--</div>
+          <div class="muted" id="dateNow">—</div>
+        </div>
+
+        <div class="card">
+          <div class="cardHead">
+            <h3>Weather</h3>
+            <div class="muted" id="weatherCity">—</div>
+          </div>
+          <div class="wxRow">
+            <div class="big" id="tempNow">—°</div>
+            <div class="muted" id="weatherDesc">—</div>
+          </div>
+          <div class="muted small" id="weatherMeta">—</div>
+        </div>
       </div>
-      <div class="muted small" id="weatherMeta">—</div>
-    </div>
-  </div>
-</section>
-    <!-- LEFT: Planner -->
+    </section>
+
+    <!-- LEFT -->
     <section class="panel">
       <div class="panelHead">
         <h2>Today’s Plan</h2>
@@ -84,7 +86,7 @@
         <button class="tab" data-tab="calendar">Calendar</button>
       </div>
 
-      <!-- Planner tab -->
+      <!-- Planner -->
       <div class="tabPane active" id="tab-planner">
         <div class="help">
           <strong>Tip:</strong> Add supplements on the right, then build a daily routine here by time-of-day.
@@ -111,7 +113,7 @@
         </div>
       </div>
 
-      <!-- Take-together checker tab -->
+      <!-- Check -->
       <div class="tabPane" id="tab-check">
         <div class="help">
           Select 2+ supplements to check your saved “do-not-combine / spacing / notes” rules.
@@ -129,7 +131,7 @@
         </div>
       </div>
 
-      <!-- Rules tab -->
+      <!-- Rules -->
       <div class="tabPane" id="tab-rules">
         <div class="help">
           Add “do not combine” or “needs spacing” rules between supplements.
@@ -158,90 +160,8 @@
               <option value="note">Note</option>
             </select>
           </div>
-          <div class="tabPane" id="tab-calendar">
-  <div class="help">
-    Add medical appointments and notes. Times use your device time zone automatically:
-    <strong id="calTzLabel">—</strong>
-  </div>
 
-  <div class="grid2">
-    <div class="card">
-      <div class="cardHead">
-        <h3 id="calMonthLabel">Month</h3>
-        <div class="row gap">
-          <button id="calPrevBtn" class="ghost btnSmall">◀</button>
-          <button id="calTodayBtn" class="btnSmall">Today</button>
-          <button id="calNextBtn" class="ghost btnSmall">▶</button>
-        </div>
-      </div>
-
-      <div id="calGrid" class="calGrid"></div>
-      <div class="muted small" style="margin-top:8px;">
-        Tap a day to view/add appointments.
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="cardHead">
-        <h3 id="calDayLabel">Selected Day</h3>
-        <button id="calAddBtn" class="btnSmall">+ Add Appointment</button>
-      </div>
-
-      <div id="calDayList" class="list"></div>
-    </div>
-  </div>
-
-  <!-- Appointment modal -->
-  <div id="apptModal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modalCard">
-      <div class="modalHead">
-        <h3 id="apptTitle">Add Appointment</h3>
-        <button id="apptClose" class="ghost">✕</button>
-      </div>
-
-      <div class="modalBody">
-        <div class="formRow">
-          <label class="label">Title</label>
-          <input id="apptName" class="input" placeholder="e.g., Speech therapy / Pediatrician" />
-        </div>
-
-        <div class="grid2">
           <div class="formRow">
-            <label class="label">Date</label>
-            <input id="apptDate" type="date" class="input" />
-          </div>
-          <div class="formRow">
-            <label class="label">Time</label>
-            <input id="apptTime" type="time" class="input" />
-          </div>
-        </div>
-
-        <div class="formRow">
-          <label class="label">Location (optional)</label>
-          <input id="apptLoc" class="input" placeholder="e.g., SickKids / Clinic address" />
-        </div>
-
-        <div class="formRow">
-          <label class="label">Notes</label>
-          <textarea id="apptNotes" class="input textarea" placeholder="What to bring, questions to ask, documents, etc."></textarea>
-        </div>
-
-        <div class="muted small">
-          Times are saved and shown in your device time zone.
-        </div>
-      </div>
-
-      <div class="modalFoot">
-        <button id="apptDelete" class="danger hidden">Delete</button>
-        <div class="spacer"></div>
-        <button id="apptCancel" class="ghost">Cancel</button>
-        <button id="apptSave" class="btn">Save</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-        <div class="formRow">
             <label class="label">Details</label>
             <input id="ruleText" class="input" placeholder="e.g., Separate by 2 hours (doctor/pharmacist note)" />
           </div>
@@ -252,11 +172,90 @@
           </div>
         </div>
 
-        <div class="card">
+        <div class="card" style="margin-top:12px;">
           <div class="cardHead">
             <h3>Saved Rules</h3>
           </div>
           <div id="rulesList" class="list"></div>
+        </div>
+      </div>
+
+      <!-- Calendar -->
+      <div class="tabPane" id="tab-calendar">
+        <div class="help">
+          Add medical appointments and notes. Time zone:
+          <strong id="calTzLabel">—</strong>
+        </div>
+
+        <div class="grid2">
+          <div class="card">
+            <div class="cardHead">
+              <h3 id="calMonthLabel">Month</h3>
+              <div class="row gap">
+                <button id="calPrevBtn" class="ghost btnSmall">◀</button>
+                <button id="calTodayBtn" class="btnSmall">Today</button>
+                <button id="calNextBtn" class="ghost btnSmall">▶</button>
+              </div>
+            </div>
+
+            <div id="calGrid" class="calGrid"></div>
+            <div class="muted small" style="margin-top:8px;">Tap a day to view/add appointments.</div>
+          </div>
+
+          <div class="card">
+            <div class="cardHead">
+              <h3 id="calDayLabel">Selected Day</h3>
+              <button id="calAddBtn" class="btnSmall">+ Add Appointment</button>
+            </div>
+
+            <div id="calDayList" class="list"></div>
+          </div>
+        </div>
+
+        <div id="apptModal" class="modal hidden" role="dialog" aria-modal="true">
+          <div class="modalCard">
+            <div class="modalHead">
+              <h3 id="apptTitle">Add Appointment</h3>
+              <button id="apptClose" class="ghost">✕</button>
+            </div>
+
+            <div class="modalBody">
+              <div class="formRow">
+                <label class="label">Title</label>
+                <input id="apptName" class="input" placeholder="e.g., Speech therapy / Pediatrician" />
+              </div>
+
+              <div class="grid2">
+                <div class="formRow">
+                  <label class="label">Date</label>
+                  <input id="apptDate" type="date" class="input" />
+                </div>
+                <div class="formRow">
+                  <label class="label">Time</label>
+                  <input id="apptTime" type="time" class="input" />
+                </div>
+              </div>
+
+              <div class="formRow">
+                <label class="label">Location (optional)</label>
+                <input id="apptLoc" class="input" placeholder="Clinic / address" />
+              </div>
+
+              <div class="formRow">
+                <label class="label">Notes</label>
+                <textarea id="apptNotes" class="input textarea" placeholder="What to bring, questions, documents, etc."></textarea>
+              </div>
+
+              <div class="muted small">Saved and shown in your device time zone.</div>
+            </div>
+
+            <div class="modalFoot">
+              <button id="apptDelete" class="danger hidden">Delete</button>
+              <div class="spacer"></div>
+              <button id="apptCancel" class="ghost">Cancel</button>
+              <button id="apptSave" class="btn">Save</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -265,7 +264,7 @@
       </div>
     </section>
 
-    <!-- RIGHT: Supplements Library -->
+    <!-- RIGHT -->
     <aside class="panel">
       <div class="panelHead">
         <h2>Supplements Library</h2>
@@ -279,7 +278,7 @@
     </aside>
   </main>
 
-  <!-- Modal -->
+  <!-- Supplement Modal -->
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modalCard">
       <div class="modalHead">
@@ -336,7 +335,6 @@
                 <option value="">— none —</option>
                 <option>Morning</option>
                 <option>Midday</option>
-                <option>Afternoon</option>
                 <option>Evening</option>
                 <option>Bedtime</option>
               </select>
@@ -364,6 +362,6 @@
     </div>
   </div>
 
-  <script src="./app.js"></script>
+  <script src="./app.js?v=7"></script>
 </body>
 </html>

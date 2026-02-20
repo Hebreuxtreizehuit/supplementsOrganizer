@@ -336,3 +336,14 @@ body{
   border-color: rgba(74,163,255,.65);
   background: rgba(74,163,255,.14);
 }
+.wxGrid{
+  padding:14px;
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:12px;
+}
+@media (max-width: 980px){
+  .wxGrid{grid-template-columns:1fr}
+}
+.big{font-size:34px; font-weight:900; letter-spacing:.5px;}
+.wxRow{display:flex; align-items:baseline; gap:10px;}

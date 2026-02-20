@@ -1,12 +1,12 @@
-const CACHE = "supporg-cache-v1";
+const CACHE = "supporg-cache-v7";
 const ASSETS = [
   "./",
-  "./index.html",
-  "./styles.css",
-  "./app.js",
-  "./manifest.json",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./index.html?v=7",
+  "./styles.css?v=7",
+  "./app.js?v=7",
+  "./manifest.json?v=7",
+  "./icons/icon-192.png?v=7",
+  "./icons/icon-512.png?v=7"
 ];
 
 self.addEventListener("install", (e) => {
@@ -25,8 +25,7 @@ self.addEventListener("fetch", (e) => {
   e.respondWith(
     caches.match(e.request).then((cached) => {
       return cached || fetch(e.request).then((resp) => {
-        // cache new GET requests (best-effort)
-        if(e.request.method === "GET" && resp.ok){
+        if (e.request.method === "GET" && resp.ok) {
           const copy = resp.clone();
           caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{});
         }

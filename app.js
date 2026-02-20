@@ -2,47 +2,97 @@
    - Supplements library with photo, notes, tags
    - Daily planner with time slots
    - Rule-based “take together” checker (user-defined, non-medical)
-   - Export / Import JSON backups
+   - Weather (Open-Meteo) + local time (device timezone)
+   - Calendar appointments + notes (timezone-aware)
+   - Export / Import JSON backups (includes appointments)
 */
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-const STORE_KEY = "supporg.v1";
-const WEATHER_KEY = "supporg.weather.v1";
+const STORE_KEY   = "supporg.v7";
+const WEATHER_KEY = "supporg.weather.v7";
+const CITY_KEY    = "supporg.city.v7";
+
 const DEFAULT_CITY = "Toronto";
 
 const state = loadState();
 
+let currentDate = todayISO();
+let selectedSlotId = null;
+let editingSuppId = null;
+
+let deferredPrompt = null;
+
+// -------------------- Small helpers --------------------
 function uid(prefix="id"){
   return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 }
 
+function pad2(n){ return String(n).padStart(2,"0"); }
+
 function todayISO(){
   const d = new Date();
-  const pad = (n)=>String(n).padStart(2,"0");
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
 }
 
+function escapeHTML(str){
+  return String(str ?? "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+}
+
+function fileToDataURL(file){
+  return new Promise((resolve,reject)=>{
+    const r = new FileReader();
+    r.onload = ()=>resolve(String(r.result));
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+function localTZ(){
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+// -------------------- State --------------------
 function loadState(){
   const raw = localStorage.getItem(STORE_KEY);
   if(raw){
-    try { return JSON.parse(raw); } catch(e){}
+    try{
+      const obj = JSON.parse(raw);
+      // normalize missing fields (safe upgrades)
+      obj.supplements   = Array.isArray(obj.supplements) ? obj.supplements : [];
+      obj.slots         = Array.isArray(obj.slots) ? obj.slots : [];
+      obj.plans         = obj.plans && typeof obj.plans === "object" ? obj.plans : {};
+      obj.rules         = Array.isArray(obj.rules) ? obj.rules : [];
+      obj.appointments  = Array.isArray(obj.appointments) ? obj.appointments : [];
+      if(obj.slots.length === 0){
+        obj.slots = [
+          {id: uid("slot"), name:"Morning"},
+          {id: uid("slot"), name:"Midday"},
+          {id: uid("slot"), name:"Evening"},
+          {id: uid("slot"), name:"Bedtime"},
+        ];
+      }
+      return obj;
+    }catch(e){}
   }
+
   return {
-    supplements: [], // {id,name,dose,form,notes,tags[],photoDataUrl, defaultSlot, freq}
+    supplements: [],
     slots: [
       {id: uid("slot"), name:"Morning"},
       {id: uid("slot"), name:"Midday"},
       {id: uid("slot"), name:"Evening"},
       {id: uid("slot"), name:"Bedtime"},
     ],
-    plans: {
-      // dateISO: { slotId: [suppId,...] }
-    },
-    rules: [
-      // {id,aId,bId,type,text,createdAt}
-    ]
+    plans: {},
+    rules: [],
+    appointments: [] // ✅ calendar data
   };
 }
 
@@ -57,12 +107,7 @@ function ensurePlan(dateISO){
   }
 }
 
-let currentDate = todayISO();
-let selectedSlotId = null;
-let editingSuppId = null;
-let deferredPrompt = null;
-
-// ---- Network badge + install
+// -------------------- Network + Install --------------------
 function refreshNetBadge(){
   const badge = $("#netBadge");
   const on = navigator.onLine;
@@ -87,90 +132,97 @@ $("#installBtn").addEventListener("click", async () => {
   $("#installBtn").classList.add("hidden");
 });
 
-// ---- Tabs
-$$(".tab").forEach(btn=>{
-  btn.addEventListener("click", ()=>{
-    $$(".tab").forEach(b=>b.classList.remove("active"));
-    $$(".tabPane").forEach(p=>p.classList.remove("active"));
-    btn.classList.add("active");
-    $(`#tab-${btn.dataset.tab}`).classList.add("active");
+// -------------------- Tabs --------------------
+function wireTabs(){
+  $$(".tab").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      $$(".tab").forEach(b=>b.classList.remove("active"));
+      $$(".tabPane").forEach(p=>p.classList.remove("active"));
+      btn.classList.add("active");
+      const pane = $(`#tab-${btn.dataset.tab}`);
+      if(pane) pane.classList.add("active");
+    });
   });
-});
+}
 
-// ---- Date picker
-$("#datePick").value = currentDate;
-$("#datePick").addEventListener("change", (e)=>{
-  currentDate = e.target.value || todayISO();
-  ensurePlan(currentDate);
-  selectedSlotId = null;
-  renderAll();
-});
+// -------------------- Date picker + Print --------------------
+function wireDateAndPrint(){
+  $("#datePick").value = currentDate;
 
-// ---- Print
-$("#printBtn").addEventListener("click", ()=> window.print());
-
-// ---- Export / Import
-$("#exportBtn").addEventListener("click", ()=>{
-  const blob = new Blob([JSON.stringify(state, null, 2)], {type:"application/json"});
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `supplements-organizer-backup_${todayISO()}.json`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-});
-
-$("#importInput").addEventListener("change", async (e)=>{
-  const file = e.target.files?.[0];
-  if(!file) return;
-  try{
-    const text = await file.text();
-    const obj = JSON.parse(text);
-
-    // light validation
-    if(!obj || !Array.isArray(obj.supplements) || !Array.isArray(obj.slots) || !obj.plans || !Array.isArray(obj.rules)){
-      alert("That file doesn't look like a valid backup for this app.");
-      e.target.value = "";
-      return;
-    }
-
-    // replace state in-place
-    state.supplements = obj.supplements;
-    state.slots = obj.slots;
-    state.plans = obj.plans;
-    state.rules = obj.rules;
-    state.appointments = obj.appointments || [];
-
+  $("#datePick").addEventListener("change", (e)=>{
+    currentDate = e.target.value || todayISO();
     ensurePlan(currentDate);
-    saveState();
+    selectedSlotId = null;
     renderAll();
-    alert("Import complete.");
-  }catch(err){
-    alert("Import failed. Make sure you selected a valid JSON backup.");
-  }finally{
-    e.target.value = "";
-  }
-});
+  });
 
-// ---- Supplements list search + add
-$("#search").addEventListener("input", renderSuppList);
-$("#newBtn").addEventListener("click", ()=> openModal(null));
+  $("#printBtn").addEventListener("click", ()=> window.print());
+}
 
-// ---- Slots
-$("#addSlotBtn").addEventListener("click", ()=>{
-  const name = prompt("Name of the new time slot (e.g., After School):");
-  if(!name) return;
-  state.slots.push({id: uid("slot"), name: name.trim()});
-  ensurePlan(currentDate);
-  saveState();
-  renderAll();
-});
+// -------------------- Export / Import (includes appointments) --------------------
+function wireExportImport(){
+  $("#exportBtn").addEventListener("click", ()=>{
+    const blob = new Blob([JSON.stringify(state, null, 2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `supplements-organizer-backup_${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
 
+  $("#importInput").addEventListener("change", async (e)=>{
+    const file = e.target.files?.[0];
+    if(!file) return;
+
+    try{
+      const text = await file.text();
+      const obj = JSON.parse(text);
+
+      // light validation
+      if(!obj || !Array.isArray(obj.supplements) || !Array.isArray(obj.slots) || !obj.plans || !Array.isArray(obj.rules)){
+        alert("That file doesn't look like a valid backup for this app.");
+        e.target.value = "";
+        return;
+      }
+
+      // replace in-place
+      state.supplements  = obj.supplements;
+      state.slots        = obj.slots;
+      state.plans        = obj.plans;
+      state.rules        = obj.rules;
+      state.appointments = Array.isArray(obj.appointments) ? obj.appointments : [];
+
+      ensurePlan(currentDate);
+      saveState();
+      renderAll();
+      renderCalendar();
+      alert("Import complete.");
+    }catch(err){
+      alert("Import failed. Make sure you selected a valid JSON backup.");
+    }finally{
+      e.target.value = "";
+    }
+  });
+}
+
+// -------------------- Planner: Slots --------------------
 function slotName(id){
   return state.slots.find(s=>s.id===id)?.name || "Slot";
 }
 
 function suppById(id){
   return state.supplements.find(s=>s.id===id) || null;
+}
+
+function wireSlots(){
+  $("#addSlotBtn").addEventListener("click", ()=>{
+    const name = prompt("Name of the new time slot (e.g., After School):");
+    if(!name) return;
+    state.slots.push({id: uid("slot"), name: name.trim()});
+    ensurePlan(currentDate);
+    saveState();
+    renderAll();
+  });
 }
 
 function renderSlots(){
@@ -211,10 +263,8 @@ function renderSlots(){
     el.querySelector('[data-act="delete"]').addEventListener("click", ()=>{
       if(!confirm(`Delete slot "${s.name}"? (Items inside will be removed from daily plans, but supplements remain.)`)) return;
 
-      // remove slot
       state.slots = state.slots.filter(x=>x.id!==s.id);
 
-      // remove from all date plans
       for(const d of Object.keys(state.plans)){
         if(state.plans[d] && state.plans[d][s.id]) delete state.plans[d][s.id];
       }
@@ -245,7 +295,6 @@ function renderSlotDetails(){
 
   ensurePlan(currentDate);
   const chosenIds = state.plans[currentDate][selectedSlotId] || [];
-
   const available = state.supplements.slice().sort((a,b)=>a.name.localeCompare(b.name));
 
   panel.innerHTML = `
@@ -262,7 +311,8 @@ function renderSlotDetails(){
   `;
 
   const sel = panel.querySelector("#slotAddSelect");
-  sel.innerHTML = `<option value="">— choose —</option>` + available.map(s=>`<option value="${s.id}">${escapeHTML(s.name)}</option>`).join("");
+  sel.innerHTML = `<option value="">— choose —</option>` +
+    available.map(s=>`<option value="${s.id}">${escapeHTML(s.name)}</option>`).join("");
 
   panel.querySelector("#slotAddBtn").addEventListener("click", ()=>{
     const id = sel.value;
@@ -307,7 +357,7 @@ function renderSlotDetails(){
       </div>
     `;
 
-    el.querySelector('[data-act="edit"]').addEventListener("click", ()=> openModal(s.id));
+    el.querySelector('[data-act="edit"]').addEventListener("click", ()=> openSuppModal(s.id));
     el.querySelector('[data-act="remove"]').addEventListener("click", ()=>{
       ensurePlan(currentDate);
       state.plans[currentDate][selectedSlotId] = state.plans[currentDate][selectedSlotId].filter(x=>x!==id);
@@ -319,146 +369,21 @@ function renderSlotDetails(){
     itemsBox.appendChild(el);
   }
 }
-function getDeviceTimeZone(){
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+// -------------------- Supplements list + modal --------------------
+function renderTagsLine(s){
+  const parts = [];
+  if(s.defaultSlot) parts.push(`Default: ${s.defaultSlot}`);
+  if(s.freq) parts.push(`Freq: ${s.freq}`);
+  if((s.tags||[]).length) parts.push(`Tags: ${(s.tags||[]).join(", ")}`);
+  return parts.length ? parts.join(" • ") : "—";
 }
 
-function formatLocalTime(){
-  const tz = getDeviceTimeZone();
-  const now = new Date();
-
-  const timeStr = new Intl.DateTimeFormat(undefined, {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  }).format(now);
-
-  const dateStr = new Intl.DateTimeFormat(undefined, {
-    timeZone: tz,
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric"
-  }).format(now);
-
-  $("#tzLabel").textContent = tz;
-  $("#timeNow").textContent = timeStr;
-  $("#dateNow").textContent = dateStr;
+function wireSuppLibrary(){
+  $("#search").addEventListener("input", renderSuppList);
+  $("#newBtn").addEventListener("click", ()=> openSuppModal(null));
 }
 
-function weatherCodeToText(code){
-  // Open-Meteo weather_code (WMO) quick mapping
-  const map = {
-    0:"Clear",
-    1:"Mostly clear", 2:"Partly cloudy", 3:"Overcast",
-    45:"Fog", 48:"Depositing rime fog",
-    51:"Light drizzle",53:"Drizzle",55:"Heavy drizzle",
-    61:"Light rain",63:"Rain",65:"Heavy rain",
-    71:"Light snow",73:"Snow",75:"Heavy snow",
-    80:"Light showers",81:"Showers",82:"Violent showers",
-    95:"Thunderstorm"
-  };
-  return map[code] || `Weather code ${code}`;
-}
-
-async function fetchWeatherByCity(city){
-  // 1) Geocode city -> lat/lon
-  const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`;
-  const geoResp = await fetch(geoUrl);
-  if(!geoResp.ok) throw new Error("Geocoding failed");
-  const geo = await geoResp.json();
-  const hit = geo?.results?.[0];
-  if(!hit) throw new Error("City not found");
-
-  // 2) Fetch current weather (timezone=auto)
-  const { latitude, longitude, name, admin1, country } = hit;
-  const wxUrl =
-    `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
-    `&current=temperature_2m,weather_code,wind_speed_10m` +
-    `&timezone=auto`;
-  const wxResp = await fetch(wxUrl);
-  if(!wxResp.ok) throw new Error("Weather fetch failed");
-  const wx = await wxResp.json();
-
-  const out = {
-    cityLabel: [name, admin1, country].filter(Boolean).join(", "),
-    temperature: wx?.current?.temperature_2m,
-    wind: wx?.current?.wind_speed_10m,
-    code: wx?.current?.weather_code,
-    fetchedAt: Date.now()
-  };
-
-  localStorage.setItem(WEATHER_KEY, JSON.stringify(out));
-  return out;
-}
-
-function renderWeather(data){
-  if(!data){
-    $("#weatherCity").textContent = "—";
-    $("#tempNow").textContent = "—°";
-    $("#weatherDesc").textContent = "—";
-    $("#weatherMeta").textContent = "—";
-    return;
-  }
-  $("#weatherCity").textContent = data.cityLabel || "—";
-  $("#tempNow").textContent = (data.temperature ?? "—") + "°";
-  $("#weatherDesc").textContent = weatherCodeToText(data.code);
-  const mins = Math.round((Date.now() - (data.fetchedAt||Date.now()))/60000);
-  $("#weatherMeta").textContent = `Updated ${mins} min ago • Wind: ${(data.wind ?? "—")} km/h`;
-}
-
-function loadCachedWeather(){
-  const raw = localStorage.getItem(WEATHER_KEY);
-  if(!raw) return null;
-  try { return JSON.parse(raw); } catch(e){ return null; }
-}
-
-async function updateWeather(city){
-  $("#weatherMeta").textContent = "Updating…";
-  try{
-    const data = await fetchWeatherByCity(city);
-    renderWeather(data);
-  }catch(e){
-    // fallback to cache if offline / error
-    const cached = loadCachedWeather();
-    renderWeather(cached);
-    $("#weatherMeta").textContent = cached
-      ? `Offline / failed to update • showing last saved weather`
-      : `Offline / failed to update • no saved weather yet`;
-  }
-}
-
-function getSavedCity(){
-  return localStorage.getItem("supporg.city") || DEFAULT_CITY;
-}
-
-function setSavedCity(city){
-  localStorage.setItem("supporg.city", city);
-}
-
-async function cityFromGPS(){
-  // Gets lat/lon from device, then reverse geocodes via Open-Meteo
-  return new Promise((resolve, reject)=>{
-    if(!navigator.geolocation) return reject(new Error("No GPS"));
-    navigator.geolocation.getCurrentPosition(async (pos)=>{
-      try{
-        const { latitude, longitude } = pos.coords;
-        const url = `https://geocoding-api.open-meteo.com/v1/reverse?latitude=${latitude}&longitude=${longitude}&language=en&format=json`;
-        const resp = await fetch(url);
-        if(!resp.ok) throw new Error("Reverse geocode failed");
-        const data = await resp.json();
-        const hit = data?.results?.[0];
-        if(!hit?.name) throw new Error("No city name");
-        resolve(hit.name);
-      }catch(err){
-        reject(err);
-      }
-    }, reject, { enableHighAccuracy:false, timeout:8000 });
-  });
-}
-
-// ---- Supplements library
 function renderSuppList(){
   const q = ($("#search").value || "").trim().toLowerCase();
   const box = $("#suppList");
@@ -484,6 +409,7 @@ function renderSuppList(){
     card.className = "suppCard";
 
     const initials = (s.name || "?").split(/\s+/).slice(0,2).map(x=>x[0]?.toUpperCase()||"").join("");
+
     card.innerHTML = `
       <div class="thumb">${s.photoDataUrl ? `<img alt="" src="${s.photoDataUrl}">` : escapeHTML(initials)}</div>
       <div>
@@ -497,7 +423,7 @@ function renderSuppList(){
       </div>
     `;
 
-    card.querySelector('[data-act="edit"]').addEventListener("click", ()=> openModal(s.id));
+    card.querySelector('[data-act="edit"]').addEventListener("click", ()=> openSuppModal(s.id));
 
     card.querySelector('[data-act="addToDefault"]').addEventListener("click", ()=>{
       const slot = state.slots.find(x=>x.name===s.defaultSlot) || state.slots[0];
@@ -518,33 +444,31 @@ function renderSuppList(){
   renderCheckPicker();
 }
 
-function renderTagsLine(s){
-  const parts = [];
-  if(s.defaultSlot) parts.push(`Default: ${s.defaultSlot}`);
-  if(s.freq) parts.push(`Freq: ${s.freq}`);
-  if((s.tags||[]).length) parts.push(`Tags: ${(s.tags||[]).join(", ")}`);
-  return parts.length ? parts.join(" • ") : "—";
+const suppModal = $("#modal");
+
+function wireSuppModal(){
+  $("#closeModal").addEventListener("click", closeSuppModal);
+  $("#cancelBtn").addEventListener("click", closeSuppModal);
+  $("#saveBtn").addEventListener("click", saveSuppModal);
+  $("#deleteBtn").addEventListener("click", deleteSuppModal);
+
+  $("#m_photo").addEventListener("change", async (e)=>{
+    const file = e.target.files?.[0];
+    if(!file) return;
+    const dataUrl = await fileToDataURL(file);
+    $("#m_preview").src = dataUrl;
+    $("#m_preview").classList.remove("hidden");
+    $("#m_previewEmpty").classList.add("hidden");
+    $("#m_preview").dataset.dataUrl = dataUrl;
+  });
+
+  // click backdrop to close
+  suppModal.addEventListener("click", (e)=>{
+    if(e.target.id === "modal") closeSuppModal();
+  });
 }
 
-// ---- Modal add/edit supplement
-const modal = $("#modal");
-$("#closeModal").addEventListener("click", closeModal);
-$("#cancelBtn").addEventListener("click", closeModal);
-
-$("#m_photo").addEventListener("change", async (e)=>{
-  const file = e.target.files?.[0];
-  if(!file) return;
-  const dataUrl = await fileToDataURL(file);
-  $("#m_preview").src = dataUrl;
-  $("#m_preview").classList.remove("hidden");
-  $("#m_previewEmpty").classList.add("hidden");
-  $("#m_preview").dataset.dataUrl = dataUrl;
-});
-
-$("#saveBtn").addEventListener("click", saveModal);
-$("#deleteBtn").addEventListener("click", deleteModal);
-
-function openModal(suppId){
+function openSuppModal(suppId){
   editingSuppId = suppId;
   const isEdit = !!suppId;
   $("#modalTitle").textContent = isEdit ? "Edit Supplement" : "Add Supplement";
@@ -573,15 +497,15 @@ function openModal(suppId){
     $("#m_preview").dataset.dataUrl = "";
   }
 
-  modal.classList.remove("hidden");
+  suppModal.classList.remove("hidden");
 }
 
-function closeModal(){
-  modal.classList.add("hidden");
+function closeSuppModal(){
+  suppModal.classList.add("hidden");
   editingSuppId = null;
 }
 
-function saveModal(){
+function saveSuppModal(){
   const name = $("#m_name").value.trim();
   if(!name){
     alert("Name is required.");
@@ -594,10 +518,7 @@ function saveModal(){
     dose: $("#m_dose").value.trim(),
     form: $("#m_form").value.trim(),
     notes: $("#m_notes").value.trim(),
-    tags: ($("#m_tags").value || "")
-      .split(",")
-      .map(x=>x.trim())
-      .filter(Boolean),
+    tags: ($("#m_tags").value || "").split(",").map(x=>x.trim()).filter(Boolean),
     photoDataUrl: $("#m_preview").dataset.dataUrl || "",
     defaultSlot: $("#m_defaultSlot").value || "",
     freq: $("#m_freq").value || "daily"
@@ -608,7 +529,6 @@ function saveModal(){
     if(idx>=0) state.supplements[idx] = obj;
   }else{
     state.supplements.push(obj);
-    // optional: auto-add to today's plan if default slot is set
     if(obj.defaultSlot){
       const slot = state.slots.find(x=>x.name===obj.defaultSlot);
       if(slot){
@@ -620,91 +540,81 @@ function saveModal(){
   }
 
   saveState();
-  closeModal();
+  closeSuppModal();
   renderAll();
 }
 
-function deleteModal(){
+function deleteSuppModal(){
   if(!editingSuppId) return;
   const s = suppById(editingSuppId);
   if(!s) return;
   if(!confirm(`Delete "${s.name}"?`)) return;
 
-  // remove supplement
   state.supplements = state.supplements.filter(x=>x.id!==editingSuppId);
 
-  // remove from all plans
   for(const d of Object.keys(state.plans)){
     for(const slotId of Object.keys(state.plans[d] || {})){
       state.plans[d][slotId] = (state.plans[d][slotId] || []).filter(x=>x!==editingSuppId);
     }
   }
 
-  // remove any rules involving it
   state.rules = state.rules.filter(r => r.aId!==editingSuppId && r.bId!==editingSuppId);
 
   saveState();
-  closeModal();
+  closeSuppModal();
   renderAll();
 }
 
-// ---- Rules
+// -------------------- Rules --------------------
+function wireRules(){
+  $("#addRuleBtn").addEventListener("click", ()=>{
+    const aId = $("#ruleA").value;
+    const bId = $("#ruleB").value;
+    const type = $("#ruleType").value;
+    const text = $("#ruleText").value.trim();
+
+    if(!aId || !bId) return alert("Pick both supplements.");
+    if(aId === bId) return alert("Pick two different supplements.");
+    if(!text) return alert("Add details (e.g., spacing time or note).");
+
+    const [x,y] = aId < bId ? [aId,bId] : [bId,aId];
+
+    state.rules.push({
+      id: uid("rule"),
+      aId: x,
+      bId: y,
+      type,
+      text,
+      createdAt: Date.now()
+    });
+
+    $("#ruleText").value = "";
+    saveState();
+    renderRulesList();
+    renderCheckResults();
+  });
+
+  $("#clearRulesBtn").addEventListener("click", ()=>{
+    if(!confirm("Delete ALL rules?")) return;
+    state.rules = [];
+    saveState();
+    renderRulesList();
+    renderCheckResults();
+  });
+}
+
 function renderRulePickers(){
   const a = $("#ruleA");
   const b = $("#ruleB");
   if(!a || !b) return;
 
-  const opts = state.supplements.slice().sort((x,y)=>x.name.localeCompare(y.name))
+  const opts = state.supplements.slice()
+    .sort((x,y)=>x.name.localeCompare(y.name))
     .map(s=>`<option value="${s.id}">${escapeHTML(s.name)}</option>`).join("");
 
   a.innerHTML = `<option value="">— choose —</option>` + opts;
   b.innerHTML = `<option value="">— choose —</option>` + opts;
 }
-
-$("#addRuleBtn").addEventListener("click", ()=>{
-  const aId = $("#ruleA").value;
-  const bId = $("#ruleB").value;
-  const type = $("#ruleType").value;
-  const text = $("#ruleText").value.trim();
-
-  if(!aId || !bId){
-    alert("Pick both supplements.");
-    return;
-  }
-  if(aId === bId){
-    alert("Pick two different supplements.");
-    return;
-  }
-  if(!text){
-    alert("Add details (e.g., spacing time or note).");
-    return;
-  }
-
-  // normalize pair order so A-B and B-A are the same
-  const [x,y] = aId < bId ? [aId,bId] : [bId,aId];
-
-  state.rules.push({
-    id: uid("rule"),
-    aId: x,
-    bId: y,
-    type,
-    text,
-    createdAt: Date.now()
-  });
-
-  $("#ruleText").value = "";
-  saveState();
-  renderRulesList();
-  renderCheckResults(); // update if currently selected
-});
-
-$("#clearRulesBtn").addEventListener("click", ()=>{
-  if(!confirm("Delete ALL rules?")) return;
-  state.rules = [];
-  saveState();
-  renderRulesList();
-  renderCheckResults();
-});
 
 function renderRulesList(){
   const box = $("#rulesList");
@@ -745,14 +655,16 @@ function renderRulesList(){
   }
 }
 
-// ---- Checker
+// -------------------- Checker --------------------
 let checkSelected = new Set();
 
-$("#clearCheckBtn").addEventListener("click", ()=>{
-  checkSelected = new Set();
-  renderCheckPicker();
-  renderCheckResults();
-});
+function wireChecker(){
+  $("#clearCheckBtn").addEventListener("click", ()=>{
+    checkSelected = new Set();
+    renderCheckPicker();
+    renderCheckResults();
+  });
+}
 
 function renderCheckPicker(){
   const box = $("#checkPicker");
@@ -769,19 +681,16 @@ function renderCheckPicker(){
     const pill = document.createElement("div");
     pill.className = "pill" + (checkSelected.has(s.id) ? " on" : "");
     pill.textContent = s.name;
+
     pill.addEventListener("click", ()=>{
       if(checkSelected.has(s.id)) checkSelected.delete(s.id);
       else checkSelected.add(s.id);
       renderCheckPicker();
       renderCheckResults();
     });
+
     box.appendChild(pill);
   }
-}
-
-function pairKey(aId,bId){
-  const [x,y] = aId < bId ? [aId,bId] : [bId,aId];
-  return `${x}__${y}`;
 }
 
 function renderCheckResults(){
@@ -800,10 +709,8 @@ function renderCheckResults(){
     for(let j=i+1;j<ids.length;j++){
       const aId = ids[i], bId = ids[j];
       const [x,y] = aId < bId ? [aId,bId] : [bId,aId];
-      const rule = state.rules.filter(r => r.aId===x && r.bId===y);
-      if(rule.length){
-        for(const r of rule) found.push(r);
-      }
+      const rules = state.rules.filter(r => r.aId===x && r.bId===y);
+      for(const r of rules) found.push(r);
     }
   }
 
@@ -818,7 +725,6 @@ function renderCheckResults(){
 
   box.classList.remove("muted");
   const lines = found
-    .sort((a,b)=> (a.type>b.type?1:-1))
     .map(r=>{
       const A = suppById(r.aId)?.name || "Unknown";
       const B = suppById(r.bId)?.name || "Unknown";
@@ -829,47 +735,138 @@ function renderCheckResults(){
   box.innerHTML = `<ul style="margin:0; padding-left:18px">${lines}</ul>`;
 }
 
-// ---- Utils
-function escapeHTML(str){
-  return String(str ?? "")
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
+// -------------------- Time (device timezone) --------------------
+function formatLocalTime(){
+  const tz = localTZ();
+  const now = new Date();
+
+  const timeStr = new Intl.DateTimeFormat(undefined, {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(now);
+
+  const dateStr = new Intl.DateTimeFormat(undefined, {
+    timeZone: tz,
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  }).format(now);
+
+  $("#tzLabel").textContent = tz;
+  $("#timeNow").textContent = timeStr;
+  $("#dateNow").textContent = dateStr;
 }
 
-function fileToDataURL(file){
-  return new Promise((resolve,reject)=>{
-    const r = new FileReader();
-    r.onload = ()=>resolve(String(r.result));
-    r.onerror = reject;
-    r.readAsDataURL(file);
+// -------------------- Weather (Open-Meteo) --------------------
+function getSavedCity(){
+  return localStorage.getItem(CITY_KEY) || DEFAULT_CITY;
+}
+function setSavedCity(city){
+  localStorage.setItem(CITY_KEY, city);
+}
+
+function weatherCodeToText(code){
+  const map = {
+    0:"Clear",
+    1:"Mostly clear", 2:"Partly cloudy", 3:"Overcast",
+    45:"Fog", 48:"Depositing rime fog",
+    51:"Light drizzle",53:"Drizzle",55:"Heavy drizzle",
+    61:"Light rain",63:"Rain",65:"Heavy rain",
+    71:"Light snow",73:"Snow",75:"Heavy snow",
+    80:"Light showers",81:"Showers",82:"Violent showers",
+    95:"Thunderstorm"
+  };
+  return map[code] || `Weather code ${code}`;
+}
+
+function loadCachedWeather(){
+  const raw = localStorage.getItem(WEATHER_KEY);
+  if(!raw) return null;
+  try { return JSON.parse(raw); } catch(e){ return null; }
+}
+
+function renderWeather(data){
+  if(!data){
+    $("#weatherCity").textContent = "—";
+    $("#tempNow").textContent = "—°";
+    $("#weatherDesc").textContent = "—";
+    $("#weatherMeta").textContent = "—";
+    return;
+  }
+  $("#weatherCity").textContent = data.cityLabel || "—";
+  $("#tempNow").textContent = (data.temperature ?? "—") + "°";
+  $("#weatherDesc").textContent = weatherCodeToText(data.code);
+  const mins = Math.round((Date.now() - (data.fetchedAt||Date.now()))/60000);
+  $("#weatherMeta").textContent = `Updated ${mins} min ago • Wind: ${(data.wind ?? "—")} km/h`;
+}
+
+async function fetchWeatherByCity(city){
+  const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`;
+  const geoResp = await fetch(geoUrl);
+  if(!geoResp.ok) throw new Error("Geocoding failed");
+  const geo = await geoResp.json();
+  const hit = geo?.results?.[0];
+  if(!hit) throw new Error("City not found");
+
+  const { latitude, longitude, name, admin1, country } = hit;
+  const wxUrl =
+    `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+    `&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto`;
+
+  const wxResp = await fetch(wxUrl);
+  if(!wxResp.ok) throw new Error("Weather fetch failed");
+  const wx = await wxResp.json();
+
+  const out = {
+    cityLabel: [name, admin1, country].filter(Boolean).join(", "),
+    temperature: wx?.current?.temperature_2m,
+    wind: wx?.current?.wind_speed_10m,
+    code: wx?.current?.weather_code,
+    fetchedAt: Date.now()
+  };
+
+  localStorage.setItem(WEATHER_KEY, JSON.stringify(out));
+  return out;
+}
+
+async function updateWeather(city){
+  $("#weatherMeta").textContent = "Updating…";
+  try{
+    const data = await fetchWeatherByCity(city);
+    renderWeather(data);
+  }catch(e){
+    const cached = loadCachedWeather();
+    renderWeather(cached);
+    $("#weatherMeta").textContent = cached
+      ? `Offline / failed to update • showing last saved weather`
+      : `Offline / failed to update • no saved weather yet`;
+  }
+}
+
+async function cityFromGPS(){
+  return new Promise((resolve, reject)=>{
+    if(!navigator.geolocation) return reject(new Error("No GPS"));
+    navigator.geolocation.getCurrentPosition(async (pos)=>{
+      try{
+        const { latitude, longitude } = pos.coords;
+        const url = `https://geocoding-api.open-meteo.com/v1/reverse?latitude=${latitude}&longitude=${longitude}&language=en&format=json`;
+        const resp = await fetch(url);
+        if(!resp.ok) throw new Error("Reverse geocode failed");
+        const data = await resp.json();
+        const hit = data?.results?.[0];
+        if(!hit?.name) throw new Error("No city name");
+        resolve(hit.name);
+      }catch(err){
+        reject(err);
+      }
+    }, reject, { enableHighAccuracy:false, timeout:8000 });
   });
 }
 
-function renderAll(){
-  refreshNetBadge();
-  ensurePlan(currentDate);
-  renderSlots();
-  renderSlotDetails();
-  renderSuppList();
-  renderRulesList();
-  renderCheckPicker();
-  renderCheckResults();
-}
-
-function init(){
-  refreshNetBadge();
-  ensurePlan(currentDate);
-  renderAll();
-  registerSW();
-
-  // --- Time (auto device timezone)
-  formatLocalTime();
-  setInterval(formatLocalTime, 1000);
-
-  // --- Weather (city-based)
+function wireWeatherUI(){
   const city = getSavedCity();
   $("#cityInput").value = city;
 
@@ -895,32 +892,15 @@ function init(){
       $("#weatherMeta").textContent = "GPS unavailable — type your city.";
     }
   });
+}
 
-  wireCalendarUI();
-  renderCalendar();
-  
-}
-async function registerSW(){
-  if(!("serviceWorker" in navigator)) return;
-  try{
-    await navigator.serviceWorker.register("./sw.js");
-  }catch(e){
-    // silent
-  }
-}
-// ---------------- Calendar / Appointments ----------------
-let calView = { year: new Date().getFullYear(), month: new Date().getMonth() }; // month 0-11
+// -------------------- Calendar / Appointments --------------------
+let calView = { year: new Date().getFullYear(), month: new Date().getMonth() };
 let calSelectedISO = todayISO();
 let editingApptId = null;
 
-function pad2(n){ return String(n).padStart(2,"0"); }
-
 function toISODateLocal(d){
   return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
-}
-
-function localTZ(){
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
 function monthLabel(year, monthIdx){
@@ -941,9 +921,8 @@ function apptHasDay(dateISO){
 }
 
 function renderCalendar(){
-  const tz = localTZ();
   const tzEl = $("#calTzLabel");
-  if(tzEl) tzEl.textContent = tz;
+  if(tzEl) tzEl.textContent = localTZ();
 
   $("#calMonthLabel").textContent = monthLabel(calView.year, calView.month);
 
@@ -963,7 +942,6 @@ function renderCalendar(){
   const startDow = first.getDay();
   const daysInMonth = new Date(calView.year, calView.month+1, 0).getDate();
 
-  // previous month filler
   const prevDays = new Date(calView.year, calView.month, 0).getDate();
   for(let i=0;i<startDow;i++){
     const dayNum = prevDays - startDow + 1 + i;
@@ -971,13 +949,11 @@ function renderCalendar(){
     addCalCell(grid, d, true);
   }
 
-  // current month
   for(let day=1; day<=daysInMonth; day++){
     const d = new Date(calView.year, calView.month, day);
     addCalCell(grid, d, false);
   }
 
-  // next month filler to complete rows
   const totalCells = startDow + daysInMonth;
   const remainder = totalCells % 7;
   const fill = remainder === 0 ? 0 : (7 - remainder);
@@ -1034,9 +1010,7 @@ function renderCalDayPanel(){
     el.innerHTML = `
       <div>
         <strong>${escapeHTML(a.title)}</strong>
-        <div class="meta">
-          ${escapeHTML((a.timeHHMM ? a.timeHHMM : "Time not set") + (a.location ? " • " + a.location : ""))}
-        </div>
+        <div class="meta">${escapeHTML((a.timeHHMM ? a.timeHHMM : "Time not set") + (a.location ? " • " + a.location : ""))}</div>
         ${a.notes ? `<div class="meta">${escapeHTML(a.notes)}</div>` : ""}
       </div>
       <div class="right">
@@ -1048,7 +1022,6 @@ function renderCalDayPanel(){
   }
 }
 
-// Modal controls
 function openApptModal(id){
   editingApptId = id || null;
   const modal = $("#apptModal");
@@ -1080,10 +1053,7 @@ function saveAppt(){
   const location = ($("#apptLoc").value || "").trim();
   const notes = ($("#apptNotes").value || "").trim();
 
-  if(!title){
-    alert("Title is required.");
-    return;
-  }
+  if(!title) return alert("Title is required.");
 
   const now = Date.now();
   const obj = {
@@ -1107,8 +1077,9 @@ function saveAppt(){
 
   saveState();
   calSelectedISO = dateISO;
-  calView.year = new Date(dateISO+"T00:00:00").getFullYear();
-  calView.month = new Date(dateISO+"T00:00:00").getMonth();
+  const d = new Date(dateISO+"T00:00:00");
+  calView.year = d.getFullYear();
+  calView.month = d.getMonth();
 
   closeApptModal();
   renderCalendar();
@@ -1125,7 +1096,6 @@ function deleteAppt(){
 }
 
 function wireCalendarUI(){
-  // buttons
   $("#calPrevBtn").addEventListener("click", ()=>{
     const d = new Date(calView.year, calView.month-1, 1);
     calView.year = d.getFullYear();
@@ -1150,15 +1120,66 @@ function wireCalendarUI(){
 
   $("#calAddBtn").addEventListener("click", ()=> openApptModal(null));
 
-  // modal
   $("#apptClose").addEventListener("click", closeApptModal);
   $("#apptCancel").addEventListener("click", closeApptModal);
   $("#apptSave").addEventListener("click", saveAppt);
   $("#apptDelete").addEventListener("click", deleteAppt);
 
-  // close on backdrop click
   $("#apptModal").addEventListener("click", (e)=>{
     if(e.target.id === "apptModal") closeApptModal();
   });
 }
+
+// -------------------- Service Worker --------------------
+async function registerSW(){
+  if(!("serviceWorker" in navigator)) return;
+  try{
+    await navigator.serviceWorker.register("./sw.js?v=7");
+  }catch(e){
+    // silent
+  }
+}
+
+// -------------------- Render all --------------------
+function renderAll(){
+  refreshNetBadge();
+  ensurePlan(currentDate);
+  renderSlots();
+  renderSlotDetails();
+  renderSuppList();
+  renderRulesList();
+  renderCheckPicker();
+  renderCheckResults();
+}
+
+// -------------------- Init --------------------
+function init(){
+  refreshNetBadge();
+  ensurePlan(currentDate);
+
+  wireTabs();
+  wireDateAndPrint();
+  wireExportImport();
+  wireSlots();
+  wireSuppLibrary();
+  wireSuppModal();
+  wireRules();
+  wireChecker();
+
+  renderAll();
+
+  // Time
+  formatLocalTime();
+  setInterval(formatLocalTime, 1000);
+
+  // Weather
+  wireWeatherUI();
+
+  // Calendar
+  wireCalendarUI();
+  renderCalendar();
+
+  registerSW();
+}
+
 init();
